@@ -1,0 +1,1 @@
+# There will be implemented the logic of sign recognition
