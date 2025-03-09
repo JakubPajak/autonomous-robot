@@ -1,0 +1,43 @@
+{
+	"name": "AI_rob devcontainer",
+
+	"dockerFile": "../Dockerfile",
+	"workspaceFolder": "/workspace",
+	"runArgs": [
+		"--device=/dev/ttyUSB0",
+		"--privileged",
+		"--network=host",
+		"--security-opt=seccomp:unconfined",
+		"--security-opt=apparmor:unconfined",
+		"--volume=/dev:/dev",
+		"--volume=/tmp/.X11-unix:/tmp/.X11-unix",
+		"--volume=.:/workspace"
+	],
+	"remoteUser": "dev",
+	"containerEnv": {
+		"DISPLAY": "${localEnv:DISPLAY}"
+	},
+	"postCreateCommand": "git submodule update --init --recursive",
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "bash"
+			},
+			"extensions":
+			[
+				"dotjoshjohnson.xml",
+				"ms-azuretools.vscode-docker",
+				"ms-python.python",
+				"ms-iot.vscode-ros",
+				"ms-vscode.cpptools",
+				"redhat.vscode-yaml",
+				"smilerobotics.urdf",
+				"streetsidesoftware.code-spell-checker",
+				"twxs.cmake",
+				"yzhang.markdown-all-in-one",
+				"augustocdias.tasks-shell-input",
+				"eamodio.gitlens"
+			]
+		}
+	}
+}
