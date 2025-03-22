@@ -49,7 +49,8 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     libopencv-dev \
     kmod \
     kbd \
-    ~nros-humble-rqt*
+    ~nros-humble-rqt \
+    python3-opencv*
 
 RUN pip install --upgrade pip && \
     pip install pyserial textual keyboard depthai

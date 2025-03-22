@@ -1,0 +1,6 @@
+source;share/sign_recognition/hook/pythonpath.ps1
+source;share/sign_recognition/hook/pythonpath.dsv
+source;share/sign_recognition/hook/pythonpath.sh
+source;share/sign_recognition/hook/ament_prefix_path.ps1
+source;share/sign_recognition/hook/ament_prefix_path.dsv
+source;share/sign_recognition/hook/ament_prefix_path.sh
