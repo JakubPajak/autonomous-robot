@@ -12,7 +12,7 @@ class CameraFramePublisher(Node):
         self.publisher_rgb_ = self.create_publisher(Image, 'img_raw', 10)
         self.publisher_bin_ = self.create_publisher(Image, 'img_bin', 10)
 
-        self.camera = cv.VideoCapture(0)
+        self.camera = cv.VideoCapture(2)
         self.bridge = CvBridge()
 
         self.timer = self.create_timer(1/30, self.publisher_callback)  

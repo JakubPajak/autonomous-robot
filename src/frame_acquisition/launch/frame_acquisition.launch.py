@@ -28,6 +28,12 @@ def generate_launch_description():
             name='process_frame'
         ),
 
+        Node(
+            package='frame_acquisition',
+            executable='process_frame_bin',
+            name='process_frame_bin'
+        ),
+
         # Foxglove Bridge for visualization
         Node(
             package="foxglove_bridge",

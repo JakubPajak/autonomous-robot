@@ -23,7 +23,8 @@ setup(
     entry_points={
         'console_scripts': [ 
             'acquire_frame = frame_acquisition.acquire_frame:main',
-            'process_frame = frame_acquisition.process_frame:main'
+            'process_frame = frame_acquisition.process_frame:main',
+            'process_frame_bin = frame_acquisition.process_frame_bin:main',
         ],
     },
 )
