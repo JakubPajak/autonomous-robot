@@ -1,160 +1,153 @@
-import cv2 as cv
+import cv2
 import numpy as np
 from collections import deque
 
-class ProcessFrameBin:
+class LaneDetectorBin:
     def __init__(self, history_len=5):
         self.left_history = deque(maxlen=history_len)
         self.right_history = deque(maxlen=history_len)
 
     def process(self, frame):
-        h, w = frame.shape[:2]
-        out = frame.copy()
+        """
+        Główna metoda: wykrywa linie, uśrednia, wygładza i zwraca obraz, offset i status.
+        """
+        left_lines, right_lines, roi_debug = self.detect_bin_lines(frame)
 
-        # --- ROI: trapez nad jezdnią (bez ucinania dołu) ---
-        top_y = int(0.55 * h)
-        roi_poly = np.array([[
-            (int(0.15 * w), top_y),
-            (int(0.85 * w), top_y),
-            (w - 1, h - 1),
-            (0,     h - 1),
-        ]], dtype=np.int32)
-        roi_mask = np.zeros((h, w), np.uint8)
-        cv.fillPoly(roi_mask, roi_poly, 255)
+        left_line_raw = self.average_line(left_lines) if len(left_lines) > 0 else None
+        right_line_raw = self.average_line(right_lines) if len(right_lines) > 0 else None
 
-        # --- Binaryzacja ukierunkowana na białe/żółte linie ---
-        hls = cv.cvtColor(frame, cv.COLOR_BGR2HLS)
-        white  = cv.inRange(hls, (0, 200,   0), (180, 255, 120))   # jasne linie
-        yellow = cv.inRange(hls, (15, 100, 100), ( 40, 255, 255))  # żółte pasy
-        binmask = cv.bitwise_or(white, yellow)
-        binmask = cv.bitwise_and(binmask, roi_mask)
-        binmask = cv.GaussianBlur(binmask, (5, 5), 0)
+        left_line = self.smooth_poly(self.left_history, left_line_raw)
+        right_line = self.smooth_poly(self.right_history, right_line_raw)
 
-        # --- Trzymaj pionowe struktury (wytnij poziome śmieci) ---
-        vert = cv.getStructuringElement(cv.MORPH_RECT, (3, 21))
-        binmask = cv.morphologyEx(binmask, cv.MORPH_CLOSE, vert, iterations=1)
+        output = frame.copy()
+        output, status, offset = self.draw_guideline(output, left_line, right_line)
 
-        # --- Krawędzie + Hough ---
-        edges = cv.Canny(binmask, 50, 150)
-        lines = cv.HoughLinesP(edges, 1, np.pi/180, threshold=60,
-                               minLineLength=int(0.06*h), maxLineGap=int(0.02*h))
+        return output, offset, status, roi_debug
 
-        left_pts, right_pts = [], []
+    def detect_bin_lines(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5,5), 0)
+        edges = cv2.Canny(blur, 50, 150)
+
+        height, width = edges.shape
+        roi_vertices = np.array([
+            [int(0.15*width), height],
+            [int(0.35*width), int(0.5*height)],
+            [int(0.65*width), int(0.5*height)],
+            [int(0.85*width), height]
+        ])
+
+        mask = np.zeros_like(edges)
+        cv2.fillPoly(mask, [roi_vertices], 255)
+        roi_edges = cv2.bitwise_and(edges, mask)
+
+        roi_debug = cv2.cvtColor(roi_edges, cv2.COLOR_GRAY2BGR)
+        cv2.polylines(roi_debug, [roi_vertices], isClosed=True, color=(0,255,255), thickness=2)
+
+        lines = cv2.HoughLinesP(
+            roi_edges,
+            rho=1,
+            theta=np.pi/180,
+            threshold=40,
+            minLineLength=150,
+            maxLineGap=20
+        )
+
+        left_lines, right_lines = [], []
         if lines is not None:
-            for x1, y1, x2, y2 in lines[:, 0, :]:
-                dx = (x2 - x1) + 1e-6
-                slope = (y2 - y1) / dx
-                if abs(slope) < 0.5:          # odfiltruj poziome
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                if x2 == x1:
                     continue
-                xm = (x1 + x2) / 2
-                # klasyfikacja lewa/prawa
-                if slope < 0 and xm < 0.55 * w:
-                    left_pts  += [(x1, y1), (x2, y2)]
-                elif slope > 0 and xm > 0.45 * w:
-                    right_pts += [(x1, y1), (x2, y2)]
+                slope = (y2 - y1) / (x2 - x1)
+                dx = abs(x2 - x1)
+                mid_x = (x1 + x2) / 2
+                if slope < -0.3 and dx > 50 and mid_x < width/2:
+                    left_lines.append((x1,y1,x2,y2))
+                elif slope > 0.3 and dx > 50 and mid_x > width/2:
+                    right_lines.append((x1,y1,x2,y2))
 
-        # Dopasowanie prostych x = a*y + b
-        left_poly  = self._fit_line(left_pts)
-        right_poly = self._fit_line(right_pts)
+        return left_lines, right_lines, roi_debug
 
-        # Wygładzanie
-        left_poly  = self._smooth(self.left_history,  left_poly)
-        right_poly = self._smooth(self.right_history, right_poly)
+    def average_line(self, lines):
+        if len(lines) == 0:
+            return None
+        x_coords, y_coords = [], []
+        for x1,y1,x2,y2 in lines:
+            x_coords += [x1, x2]
+            y_coords += [y1, y2]
+        poly = np.polyfit(y_coords, x_coords, 1)
+        return poly
 
-        # --- Rysowanie, środek, offset ---
-        status = "NO LINES"
+    def smooth_poly(self, history, new_poly):
+        if new_poly is not None:
+            history.append(new_poly)
+            return np.mean(history, axis=0)
+        return None
+
+    def draw_guideline(self, frame, left_poly, right_poly):
+        height, width, _ = frame.shape
+        y1 = int(height * 0.5)
+        y2 = height
+
+        center_status = "NO LINES"
         offset = None
 
-        self._draw_roi(out, roi_poly)
-        self._draw_line(out, left_poly,  (255,   0,   0), top_y, h - 1)
-        self._draw_line(out, right_poly, (  0,   0, 255), top_y, h - 1)
-
-        # Żółta strzałka prowadząca (krótka)
-        self._draw_guideline_arrow(out, left_poly, right_poly, top_y, h - 1)
-
         if left_poly is not None and right_poly is not None:
-            yb = h - 1
-            xl = int(left_poly[0]  * yb + left_poly[1])
-            xr = int(right_poly[0] * yb + right_poly[1])
-            midx = (xl + xr) // 2
+            left_x1 = int(left_poly[0]*y1 + left_poly[1])
+            left_x2 = int(left_poly[0]*y2 + left_poly[1])
+            right_x1 = int(right_poly[0]*y1 + right_poly[1])
+            right_x2 = int(right_poly[0]*y2 + right_poly[1])
 
-            # zielona linia pomocnicza (pełna)
-            cv.line(out, (midx, top_y), (midx, h - 1), (0, 255, 0), 2)
+            mid_x1 = (left_x1 + right_x1) // 2
+            mid_x2 = (left_x2 + right_x2) // 2
 
-            offset = midx - w // 2
-            if abs(offset) < 0.05 * w:
-                status = "CENTER"
+            cv2.line(frame, (mid_x1, y1), (mid_x2, y2), (0,0,255), 3)
+            cv2.line(frame, (left_x1,y1), (left_x2,y2), (255,0,0), 3)
+            cv2.line(frame, (right_x1,y1), (right_x2,y2), (0,255,0), 3)
+
+            mid_screen = width // 2
+            offset = mid_x2 - mid_screen
+
+            if abs(offset) < width * 0.05:
+                center_status = "CENTER"
             elif offset < 0:
-                status = "LEFT"
+                center_status = "LEFT"
             else:
-                status = "RIGHT"
+                center_status = "RIGHT"
 
-        return out, offset, status
+        elif left_poly is not None:
+            center_status = "LEFT (ONLY LEFT LINE)"
+        elif right_poly is not None:
+            center_status = "RIGHT (ONLY RIGHT LINE)"
 
-    # ---------- helpers ----------
+        return frame, center_status, offset
 
-    def _fit_line(self, pts):
-        """Dopasuj x = a*y + b do punktów."""
-        if len(pts) < 4:
-            return None
-        pts = np.array(pts)
-        y = pts[:, 1].astype(np.float32)
-        x = pts[:, 0].astype(np.float32)
-        a, b = np.polyfit(y, x, 1)
-        return np.array([a, b], dtype=np.float32)
 
-    def _smooth(self, hist, new_poly):
-        """Prosta średnia ruchoma dla współczynników prostej."""
-        if new_poly is None:
-            return None if not hist else np.mean(np.stack(hist), axis=0)
-        hist.append(new_poly)
-        return np.mean(np.stack(hist), axis=0)
 
-    def _line_x_at_y(self, poly, y):
-        """Zwraca x(y) dla prostej x = a*y + b (lub None)."""
-        if poly is None:
-            return None
-        return int(poly[0] * y + poly[1])
+import cv2
 
-    def _draw_line(self, img, poly, color, y1, y2):
-        if poly is None:
-            return
-        x1 = self._line_x_at_y(poly, y1)
-        x2 = self._line_x_at_y(poly, y2)
-        cv.line(img, (x1, y1), (x2, y2), color, 3)
+# zakładamy, że LaneDetectorBin jest już zaimportowany
 
-    def _draw_guideline_arrow(self, img, left_poly, right_poly, y_top, y_bottom,
-                              color=(0, 255, 255), shorten=0.35, min_sep_px=40):
-        """
-        Rysuje krótką żółtą strzałkę między dwiema liniami.
-        - tail (start) na dole ROI, head ~shorten odległości w stronę góry.
-        - nie rysuje, gdy odległość między liniami za mała.
-        """
-        if left_poly is None or right_poly is None:
-            return
+if __name__ == "__main__":
+    image = cv2.imread("IMG_3156.jpg")
+    detector = LaneDetectorBin()
+    result, offset, status, roi_debug = detector.process(image)
 
-        xl_b = self._line_x_at_y(left_poly,  y_bottom)
-        xr_b = self._line_x_at_y(right_poly, y_bottom)
-        xl_t = self._line_x_at_y(left_poly,  y_top)
-        xr_t = self._line_x_at_y(right_poly, y_top)
-        if None in (xl_b, xr_b, xl_t, xr_t):
-            return
+    # Tworzymy okna i ustawiamy je w tryb fullscreen
+    cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("Lane Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-        # separacja na dole ROI – gdy za mała, pomijamy
-        if abs(xr_b - xl_b) < min_sep_px:
-            return
+    cv2.namedWindow("ROI Mask", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("ROI Mask", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-        # środek między liniami na dole i u góry
-        mid_b = ( (xl_b + xr_b)//2, y_bottom )
-        mid_t = ( (xl_t + xr_t)//2, y_top )
+    while True:
+        cv2.imshow("Lane Detection", result)
+        cv2.imshow("ROI Mask", roi_debug)
+        print(f"Offset: {offset}, Status: {status}")  # debug/log
 
-        # skrócona strzałka (np. 35% drogi)
-        dx = mid_t[0] - mid_b[0]
-        dy = mid_t[1] - mid_b[1]
-        head = ( int(mid_b[0] + dx * shorten), int(mid_b[1] + dy * shorten) )
+        # ESC żeby wyjść
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
 
-        # narysuj strzałkę (grubsza, dobrze widoczna)
-        cv.arrowedLine(img, mid_b, head, color, thickness=4, tipLength=0.25)
-
-    def _draw_roi(self, img, poly):
-        cv.polylines(img, [poly], isClosed=True, color=(0, 255, 255), thickness=2)
+    cv2.destroyAllWindows()
